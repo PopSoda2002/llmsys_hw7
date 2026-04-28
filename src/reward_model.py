@@ -264,7 +264,7 @@ class RewardModelTrainer:
         
         return {
             'chosen': chosen_encoded,
-            'rejected': rejected_encoded
+            'rejected': rejected_encoded,
         }
     
     def compute_loss(self, batch: Dict) -> torch.Tensor:
@@ -278,14 +278,25 @@ class RewardModelTrainer:
             Loss tensor
         """
         # BEGIN ASSIGN7_1
-        # TODO: Compute rewards for chosen and rejected responses
-        # Get rewards using the model's forward pass
-        # Compute ranking loss: chosen should have higher reward than rejected
-        # 1. Get rewards for chosen responses
-        # 2. Get rewards for rejected responses
-        # 3. Compute ranking loss: chosen should have higher reward than rejected
-
-        raise NotImplementedError("Need to implement loss computation for Assignment 7")
+        # Use encoded batch from prepare_batch; forward must stay in autograd (not get_rewards, which uses no_grad).
+        chosen = batch['chosen']
+        rejected = batch['rejected']
+        chosen_out = self.model(
+            input_ids=chosen['input_ids'],
+            attention_mask=chosen['attention_mask'],
+            return_dict=True,
+        )
+        rejected_out = self.model(
+            input_ids=rejected['input_ids'],
+            attention_mask=rejected['attention_mask'],
+            return_dict=True,
+        )
+        chosen_rewards = chosen_out.rewards
+        rejected_rewards = rejected_out.rewards
+        batch_size = chosen_rewards.shape[0]
+        target = torch.ones(batch_size, device=chosen_rewards.device, dtype=chosen_rewards.dtype)
+        loss = self.loss_fn(chosen_rewards, rejected_rewards, target)
+        return loss, chosen_rewards, rejected_rewards
         # END ASSIGN7_1
     
     def train_step(self, batch: Dict) -> Dict[str, float]:

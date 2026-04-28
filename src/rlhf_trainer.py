@@ -449,35 +449,38 @@ class VERLTrainer:
             prompt_len=prompt_len,
             full_attn_mask=full_attention_mask,
         )
-    
     def _compute_gae(
         self, 
-        rewards: torch.Tensor, 
-        values: torch.Tensor,
-        attention_mask: torch.Tensor
+        rewards: torch.Tensor,         # [batch_size]
+        values: torch.Tensor,          # [batch_size, T]
+        attention_mask: torch.Tensor   # [batch_size, T]
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute Generalized Advantage Estimation.
         
-        Args:
-            rewards: Reward values
-            values: State values
-            
-        Returns:
-            Tuple of (advantages, returns)
-        """
-        # BEGIN ASSIGN7_2_1
-        # TODO: Implement GAE computation.
-        # HINT: For this assignment, think of each token as a step in a multi-step episode (like time steps in a trajectory).
-        # For each sequence in the batch:
-        #   - Create an expanded reward tensor (same shape as values), where only the last token position (according to attention_mask) has the sequence reward, and all earlier tokens are zero.
-        #   - For each token position, compute returns as: returns[i] = reward[i + 1] + gamma * value[i + 1]
-        #   - Compute advantage for each token as: advantage[i] = returns[i] - value[i].
-        # Only compute these where the attention_mask is 1 (i.e., for valid tokens, not padding).
-        # END ASSIGN7_2_1
-        raise NotImplementedError("Need to implement GAE computation for Assignment 7")
+        batch_size, seq_len = values.shape
+        device = values.device
+        gamma = self.ppo_config['gamma']
+        mask_f = attention_mask.float()
         
-        # END ASSIGN7_2_1
+        seq_idx = torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        last_valid_idx = torch.where(
+            attention_mask.bool(),
+            seq_idx,
+            torch.full_like(seq_idx, -1)
+        ).max(dim=1).values                             # [batch_size]
+        
+        expanded_rewards = torch.zeros_like(values)
+        batch_idx = torch.arange(batch_size, device=device)
+        expanded_rewards[batch_idx, last_valid_idx] = rewards
+
+        pad = torch.zeros(batch_size, 1, device=device, dtype=values.dtype)
+        rewards_next = torch.cat([expanded_rewards[:, 1:], pad], dim=1)   # [B, T]
+        values_next  = torch.cat([values[:, 1:], pad], dim=1)             # [B, T]
+        
+        returns    = rewards_next + gamma * values_next
+        advantages = returns - values
+        
+        returns    = returns * mask_f
+        advantages = advantages * mask_f
         
         return advantages, returns
     
@@ -547,8 +550,11 @@ class VERLTrainer:
             #    - surr2 = clipped_ratio * advantages (clip ratio between 1-eps and 1+eps)
             # 3. Policy loss = -min(surr1, surr2).mean()
             # 4. Compute entropy bonus from policy logits
-            raise NotImplementedError("Need to implement PPO loss computation for Assignment 7")
-            
+            prob_ratio = torch.exp(new_log_probs - old_log_probs)
+            surr1 = prob_ratio * advantages
+            surr2 = torch.clamp(prob_ratio, 1 - self.config.verl.ppo_clip_eps, 1 + self.config.verl.ppo_clip_eps) * advantages
+            policy_loss = -torch.min(surr1, surr2).mean()
+            entropy = self._compute_entropy(policy_outputs.logits)
             # END ASSIGN7_2_2
 
             # Compute KL divergence for monitoring
@@ -627,9 +633,10 @@ class VERLTrainer:
         # 2. Convert logits to log_probabilities using log_softmax
         # 3. Compute entropy: -(probs * log_probs).sum(dim=-1)
         # 4. Return mean over sequence length
-        raise NotImplementedError("Need to implement entropy computation for Assignment 7")
-        
-        # END ASSIGN7_2_3
+        probs_BLV = torch.softmax(logits, dim=-1)
+        log_probs_BLV = torch.log_softmax(logits, dim=-1)
+        entropy = -(probs_BLV * log_probs_BLV).sum(dim=-1).mean()
+        return entropy
     
     def save_checkpoint(self, checkpoint_path: str, epoch: int, metrics: Dict[str, float]):
         """
